@@ -32,7 +32,7 @@ jobs:
 
           node-version: 20
 
-          cache: npm
+          package-manager-cache: false
 
       - name: Installer les dépendances
 
