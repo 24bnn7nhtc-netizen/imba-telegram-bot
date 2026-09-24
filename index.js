@@ -4,9 +4,17 @@ const INSTRUMENT = "xauusd";
 
 const TIMEFRAME = "m5";
 
-// ===== PARAMÈTRES IMBA =====
+// ================================
+
+// PARAMÈTRES IMBA
+
+// ================================
 
 const SENSITIVITY = 20;
+
+// SL à 50 % de la distance entre
+
+// l'entrée et le niveau Fibonacci
 
 const SL_MULTIPLIER = 0.50;
 
@@ -20,27 +28,33 @@ const TP4_PERCENT = 0.0125; // 1,25 %
 
 const TICK_SIZE = 0.01;
 
-// Telegram
+// ================================
+
+// TELEGRAM
+
+// ================================
 
 const TELEGRAM_CHAT_ID = "1461681427";
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-// GitHub
+// ================================
+
+// GITHUB
+
+// ================================
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
 
-// Fichier utilisé pour éviter les doublons Telegram
-
 const STATE_FILE = "state.json";
 
-// ---------------------------------------------------------
+// ================================
 
-// ARRONDI AU TICK SIZE
+// PRIX
 
-// ---------------------------------------------------------
+// ================================
 
 function roundToTick(price) {
 
@@ -54,17 +68,17 @@ function roundPrice(price) {
 
 }
 
-// ---------------------------------------------------------
+// ================================
 
-// TÉLÉGRAM
+// TELEGRAM
 
-// ---------------------------------------------------------
+// ================================
 
 async function sendTelegram(message) {
 
     if (!TELEGRAM_TOKEN) {
 
-        throw new Error("TELEGRAM_BOT_TOKEN n'est pas configuré.");
+        throw new Error("TELEGRAM_BOT_TOKEN manquant.");
 
     }
 
@@ -98,7 +112,11 @@ async function sendTelegram(message) {
 
     if (!data.ok) {
 
-        throw new Error(`Erreur Telegram: ${JSON.stringify(data)}`);
+        throw new Error(
+
+            `Erreur Telegram: ${JSON.stringify(data)}`
+
+        );
 
     }
 
@@ -106,377 +124,93 @@ async function sendTelegram(message) {
 
 }
 
-// ---------------------------------------------------------
+// ================================
 
-// RÉCUPÉRATION DES BOUGIES
+// ÉTAT GITHUB
 
-// ---------------------------------------------------------
-
-async function getCandles() {
-
-    const now = new Date();
-
-    // On récupère environ 24 heures de M5.
-
-    // Cela donne largement plus que les 20 bougies nécessaires.
-
-    const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    const data = await getHistoricalRates({
-
-        instrument: INSTRUMENT,
-
-        dates: {
-
-            from,
-
-            to: now
-
-        },
-
-        timeframe: TIMEFRAME,
-
-        format: "json"
-
-    });
-
-    if (!data || data.length === 0) {
-
-        throw new Error("Aucune donnée XAUUSD reçue.");
-
-    }
-
-    // On ne travaille que sur les bougies déjà clôturées.
-
-    const currentFiveMinute =
-
-        Math.floor(Date.now() / (5 * 60 * 1000)) * (5 * 60 * 1000);
-
-    const closedCandles = data
-
-        .filter(candle => candle.timestamp < currentFiveMinute)
-
-        .sort((a, b) => a.timestamp - b.timestamp);
-
-    return closedCandles;
-
-}
-
-// ---------------------------------------------------------
-
-// PLUS HAUT / PLUS BAS SUR "SENSITIVITY" BOUGIES
-
-// ---------------------------------------------------------
-
-function highest(candles, endIndex, length) {
-
-    let value = -Infinity;
-
-    const start = Math.max(0, endIndex - length + 1);
-
-    for (let i = start; i <= endIndex; i++) {
-
-        value = Math.max(value, candles[i].high);
-
-    }
-
-    return value;
-
-}
-
-function lowest(candles, endIndex, length) {
-
-    let value = Infinity;
-
-    const start = Math.max(0, endIndex - length + 1);
-
-    for (let i = start; i <= endIndex; i++) {
-
-        value = Math.min(value, candles[i].low);
-
-    }
-
-    return value;
-
-}
-
-// ---------------------------------------------------------
-
-// CALCUL IMBA
-
-// ---------------------------------------------------------
-
-function calculateSignal(candles) {
-
-    if (candles.length < SENSITIVITY + 2) {
-
-        return null;
-
-    }
-
-    let isLongTrend = false;
-
-    let isShortTrend = false;
-
-    let latestSignal = null;
-
-    for (let i = SENSITIVITY - 1; i < candles.length; i++) {
-
-        const candle = candles[i];
-
-        const highLine = highest(candles, i, SENSITIVITY);
-
-        const lowLine = lowest(candles, i, SENSITIVITY);
-
-        const channelRange = highLine - lowLine;
-
-        const fib236 =
-
-            highLine - channelRange * 0.236;
-
-        const fib382 =
-
-            highLine - channelRange * 0.382;
-
-        const fib5 =
-
-            highLine - channelRange * 0.5;
-
-        const fib618 =
-
-            highLine - channelRange * 0.618;
-
-        const fib786 =
-
-            highLine - channelRange * 0.786;
-
-        const imbaTrendLine = fib5;
-
-        let canLong =
-
-            candle.close >= imbaTrendLine &&
-
-            candle.close >= fib236 &&
-
-            !isLongTrend;
-
-        let canShort =
-
-            candle.close <= imbaTrendLine &&
-
-            candle.close <= fib786 &&
-
-            !isShortTrend;
-
-        // Même logique de changement de tendance
-
-        if (canLong) {
-
-            isLongTrend = true;
-
-            isShortTrend = false;
-
-            const entry = candle.close;
-
-            // SL = distance Fibonacci réduite à 50 %
-
-            const rawSL = fib786;
-
-            const sl =
-
-                entry -
-
-                (entry - rawSL) * SL_MULTIPLIER;
-
-            const signal = {
-
-                side: "LONG",
-
-                timestamp: candle.timestamp,
-
-                entry: roundToTick(entry),
-
-                sl: roundToTick(sl),
-
-                tp1: roundToTick(
-
-                    entry * (1 + TP1_PERCENT)
-
-                ),
-
-                tp2: roundToTick(
-
-                    entry * (1 + TP2_PERCENT)
-
-                ),
-
-                tp3: roundToTick(
-
-                    entry * (1 + TP3_PERCENT)
-
-                ),
-
-                tp4: roundToTick(
-
-                    entry * (1 + TP4_PERCENT)
-
-                )
-
-            };
-
-            latestSignal = signal;
-
-        } else if (canShort) {
-
-            isShortTrend = true;
-
-            isLongTrend = false;
-
-            const entry = candle.close;
-
-            // Pour un SHORT, le SL vient de Fibonacci 236
-
-            const rawSL = fib236;
-
-            const sl =
-
-                entry +
-
-                (rawSL - entry) * SL_MULTIPLIER;
-
-            const signal = {
-
-                side: "SHORT",
-
-                timestamp: candle.timestamp,
-
-                entry: roundToTick(entry),
-
-                sl: roundToTick(sl),
-
-                tp1: roundToTick(
-
-                    entry * (1 - TP1_PERCENT)
-
-                ),
-
-                tp2: roundToTick(
-
-                    entry * (1 - TP2_PERCENT)
-
-                ),
-
-                tp3: roundToTick(
-
-                    entry * (1 - TP3_PERCENT)
-
-                ),
-
-                tp4: roundToTick(
-
-                    entry * (1 - TP4_PERCENT)
-
-                )
-
-            };
-
-            latestSignal = signal;
-
-        } else {
-
-            canLong = false;
-
-            canShort = false;
-
-        }
-
-    }
-
-    return latestSignal;
-
-}
-
-// ---------------------------------------------------------
-
-// LECTURE DU DERNIER SIGNAL ENVOYÉ
-
-// ---------------------------------------------------------
+// ================================
 
 async function getState() {
 
-    try {
+    const response = await fetch(
 
-        const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${STATE_FILE}`,
 
-            `https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/${STATE_FILE}`,
+        {
 
-            {
+            headers: {
 
-                headers: {
+                "Authorization": `Bearer ${GITHUB_TOKEN}`,
 
-                    "Authorization": `Bearer ${GITHUB_TOKEN}`,
-
-                    "Accept": "application/vnd.github+json"
-
-                }
+                "Accept": "application/vnd.github+json"
 
             }
 
-        );
-
-        if (!response.ok) {
-
-            return {
-
-                lastSignalTimestamp: 0
-
-            };
-
         }
 
-        const data = await response.json();
+    );
 
-        const content = Buffer
+    if (!response.ok) {
 
-            .from(data.content, "base64")
+        console.log(
 
-            .toString("utf8");
+            "state.json introuvable : initialisation."
 
-        return {
-
-            ...JSON.parse(content),
-
-            sha: data.sha
-
-        };
-
-    } catch (error) {
-
-        console.log("État initial.");
+        );
 
         return {
 
-            lastSignalTimestamp: 0
+            trend: null,
+
+            lastProcessedTimestamp: 0,
+
+            lastSignalTimestamp: 0,
+
+            sha: null
 
         };
 
     }
 
+    const data = await response.json();
+
+    const content = Buffer
+
+        .from(data.content, "base64")
+
+        .toString("utf8");
+
+    return {
+
+        ...JSON.parse(content),
+
+        sha: data.sha
+
+    };
+
 }
 
-// ---------------------------------------------------------
+// ================================
 
-// SAUVEGARDE DU DERNIER SIGNAL
+// SAUVEGARDE ÉTAT
 
-// ---------------------------------------------------------
+// ================================
 
-async function saveState(timestamp, sha = null) {
+async function saveState(state) {
 
     const content = JSON.stringify(
 
         {
 
-            lastSignalTimestamp: timestamp
+            trend: state.trend,
+
+            lastProcessedTimestamp:
+
+                state.lastProcessedTimestamp,
+
+            lastSignalTimestamp:
+
+                state.lastSignalTimestamp
 
         },
 
@@ -488,7 +222,7 @@ async function saveState(timestamp, sha = null) {
 
     const body = {
 
-        message: `Update signal state`,
+        message: "Update IMBA bot state",
 
         content: Buffer
 
@@ -500,9 +234,9 @@ async function saveState(timestamp, sha = null) {
 
     };
 
-    if (sha) {
+    if (state.sha) {
 
-        body.sha = sha;
+        body.sha = state.sha;
 
     }
 
@@ -536,7 +270,7 @@ async function saveState(timestamp, sha = null) {
 
         throw new Error(
 
-            `Impossible de sauvegarder state.json: ${errorText}`
+            `Erreur sauvegarde state.json: ${errorText}`
 
         );
 
@@ -546,11 +280,579 @@ async function saveState(timestamp, sha = null) {
 
 }
 
-// ---------------------------------------------------------
+// ================================
 
-// FORMAT TELEGRAM
+// BOUGIES
 
-// ---------------------------------------------------------
+// ================================
+
+async function getCandles() {
+
+    const now = new Date();
+
+    // 7 jours permettent de reconstruire
+
+    // correctement le contexte initial.
+
+    const from = new Date(
+
+        now.getTime() -
+
+        7 * 24 * 60 * 60 * 1000
+
+    );
+
+    const data = await getHistoricalRates({
+
+        instrument: INSTRUMENT,
+
+        dates: {
+
+            from,
+
+            to: now
+
+        },
+
+        timeframe: TIMEFRAME,
+
+        format: "json"
+
+    });
+
+    if (!data || data.length === 0) {
+
+        throw new Error(
+
+            "Aucune donnée XAUUSD reçue."
+
+        );
+
+    }
+
+    // Bougie M5 actuellement en formation
+
+    // exclue du calcul.
+
+    const currentFiveMinute =
+
+        Math.floor(
+
+            Date.now() / (5 * 60 * 1000)
+
+        ) * (5 * 60 * 1000);
+
+    return data
+
+        .filter(
+
+            candle =>
+
+                candle.timestamp <
+
+                currentFiveMinute
+
+        )
+
+        .sort(
+
+            (a, b) =>
+
+                a.timestamp - b.timestamp
+
+        );
+
+}
+
+// ================================
+
+// HIGHEST / LOWEST
+
+// ================================
+
+function highest(candles, index, length) {
+
+    let value = -Infinity;
+
+    const start =
+
+        index - length + 1;
+
+    for (
+
+        let i = start;
+
+        i <= index;
+
+        i++
+
+    ) {
+
+        if (i >= 0) {
+
+            value = Math.max(
+
+                value,
+
+                candles[i].high
+
+            );
+
+        }
+
+    }
+
+    return value;
+
+}
+
+function lowest(candles, index, length) {
+
+    let value = Infinity;
+
+    const start =
+
+        index - length + 1;
+
+    for (
+
+        let i = start;
+
+        i <= index;
+
+        i++
+
+    ) {
+
+        if (i >= 0) {
+
+            value = Math.min(
+
+                value,
+
+                candles[i].low
+
+            );
+
+        }
+
+    }
+
+    return value;
+
+}
+
+// ================================
+
+// CALCUL IMBA
+
+// ================================
+
+function calculateLevels(
+
+    candles,
+
+    index
+
+) {
+
+    const highLine =
+
+        highest(
+
+            candles,
+
+            index,
+
+            SENSITIVITY
+
+        );
+
+    const lowLine =
+
+        lowest(
+
+            candles,
+
+            index,
+
+            SENSITIVITY
+
+        );
+
+    const channelRange =
+
+        highLine - lowLine;
+
+    const fib236 =
+
+        highLine -
+
+        channelRange * 0.236;
+
+    const fib5 =
+
+        highLine -
+
+        channelRange * 0.5;
+
+    const fib786 =
+
+        highLine -
+
+        channelRange * 0.786;
+
+    return {
+
+        highLine,
+
+        lowLine,
+
+        fib236,
+
+        fib5,
+
+        fib786
+
+    };
+
+}
+
+// ================================
+
+// TRAITEMENT DES BOUGIES
+
+// ================================
+
+function processCandles(
+
+    candles,
+
+    state
+
+) {
+
+    let trend = state.trend;
+
+    let signal = null;
+
+    // Première initialisation :
+
+    // on reconstruit le contexte historique
+
+    // MAIS on n'envoie aucun ancien signal.
+
+    const isFirstRun =
+
+        !state.lastProcessedTimestamp;
+
+    let startIndex =
+
+        SENSITIVITY - 1;
+
+    if (!isFirstRun) {
+
+        startIndex =
+
+            candles.findIndex(
+
+                candle =>
+
+                    candle.timestamp >
+
+                    state.lastProcessedTimestamp
+
+            );
+
+        if (startIndex === -1) {
+
+            return {
+
+                state,
+
+                signal: null
+
+            };
+
+        }
+
+    }
+
+    for (
+
+        let i = startIndex;
+
+        i < candles.length;
+
+        i++
+
+    ) {
+
+        const candle = candles[i];
+
+        if (i < SENSITIVITY - 1) {
+
+            continue;
+
+        }
+
+        const levels =
+
+            calculateLevels(
+
+                candles,
+
+                i
+
+            );
+
+        const {
+
+            fib236,
+
+            fib5,
+
+            fib786
+
+        } = levels;
+
+        const canLong =
+
+            candle.close >= fib5 &&
+
+            candle.close >= fib236 &&
+
+            trend !== "LONG";
+
+        const canShort =
+
+            candle.close <= fib5 &&
+
+            candle.close <= fib786 &&
+
+            trend !== "SHORT";
+
+        // ============================
+
+        // LONG
+
+        // ============================
+
+        if (canLong) {
+
+            trend = "LONG";
+
+            // Sur la première initialisation,
+
+            // on ne crée pas d'alerte historique.
+
+            if (!isFirstRun) {
+
+                const entry =
+
+                    candle.close;
+
+                const rawSL =
+
+                    fib786;
+
+                const sl =
+
+                    entry -
+
+                    (
+
+                        entry - rawSL
+
+                    ) * SL_MULTIPLIER;
+
+                signal = {
+
+                    side: "LONG",
+
+                    timestamp:
+
+                        candle.timestamp,
+
+                    entry:
+
+                        roundToTick(entry),
+
+                    sl:
+
+                        roundToTick(sl),
+
+                    tp1:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 + TP1_PERCENT)
+
+                        ),
+
+                    tp2:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 + TP2_PERCENT)
+
+                        ),
+
+                    tp3:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 + TP3_PERCENT)
+
+                        ),
+
+                    tp4:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 + TP4_PERCENT)
+
+                        )
+
+                };
+
+            }
+
+        }
+
+        // ============================
+
+        // SHORT
+
+        // ============================
+
+        else if (canShort) {
+
+            trend = "SHORT";
+
+            if (!isFirstRun) {
+
+                const entry =
+
+                    candle.close;
+
+                const rawSL =
+
+                    fib236;
+
+                const sl =
+
+                    entry +
+
+                    (
+
+                        rawSL - entry
+
+                    ) * SL_MULTIPLIER;
+
+                signal = {
+
+                    side: "SHORT",
+
+                    timestamp:
+
+                        candle.timestamp,
+
+                    entry:
+
+                        roundToTick(entry),
+
+                    sl:
+
+                        roundToTick(sl),
+
+                    tp1:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 - TP1_PERCENT)
+
+                        ),
+
+                    tp2:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 - TP2_PERCENT)
+
+                        ),
+
+                    tp3:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 - TP3_PERCENT)
+
+                        ),
+
+                    tp4:
+
+                        roundToTick(
+
+                            entry *
+
+                            (1 - TP4_PERCENT)
+
+                        )
+
+                };
+
+            }
+
+        }
+
+    }
+
+    state.trend = trend;
+
+    state.lastProcessedTimestamp =
+
+        candles[candles.length - 1]
+
+            .timestamp;
+
+    if (signal) {
+
+        state.lastSignalTimestamp =
+
+            signal.timestamp;
+
+    }
+
+    return {
+
+        state,
+
+        signal
+
+    };
+
+}
+
+// ================================
+
+// MESSAGE TELEGRAM
+
+// ================================
 
 function formatTelegram(signal) {
 
@@ -562,15 +864,7 @@ function formatTelegram(signal) {
 
             : "🔴";
 
-    const direction =
-
-        signal.side === "LONG"
-
-            ? "LONG"
-
-            : "SHORT";
-
-    return `${emoji} IMBA ALGO — ${direction}
+    return `${emoji} IMBA ALGO — ${signal.side}
 
 💰 Entrée : ${roundPrice(signal.entry)}
 
@@ -596,33 +890,41 @@ TP :
 
 }
 
-// ---------------------------------------------------------
+// ================================
 
-// PROGRAMME PRINCIPAL
+// PROGRAMME
 
-// ---------------------------------------------------------
+// ================================
 
 async function main() {
 
-    console.log("================================");
+    console.log(
 
-    console.log("IMBA TELEGRAM BOT");
+        "================================"
 
-    console.log("XAUUSD M5");
+    );
 
-    console.log("================================");
+    console.log(
 
-    if (!TELEGRAM_TOKEN) {
+        "IMBA TELEGRAM BOT"
 
-        throw new Error(
+    );
 
-            "Le secret TELEGRAM_BOT_TOKEN est manquant."
+    console.log(
 
-        );
+        "XAUUSD M5"
 
-    }
+    );
 
-    const candles = await getCandles();
+    console.log(
+
+        "================================"
+
+    );
+
+    const candles =
+
+        await getCandles();
 
     console.log(
 
@@ -630,25 +932,39 @@ async function main() {
 
     );
 
-    const lastCandle =
+    const state =
 
-        candles[candles.length - 1];
+        await getState();
 
     console.log(
 
-        "Dernière bougie clôturée :",
+        "Tendance mémorisée :",
 
-        new Date(lastCandle.timestamp).toISOString()
+        state.trend || "AUCUNE"
 
     );
 
-    const signal = calculateSignal(candles);
+    const result =
 
-    if (!signal) {
+        processCandles(
+
+            candles,
+
+            state
+
+        );
+
+    if (!result.signal) {
+
+        await saveState(
+
+            result.state
+
+        );
 
         console.log(
 
-            "Aucun signal détecté."
+            "Aucune nouvelle entrée IMBA."
 
         );
 
@@ -656,37 +972,23 @@ async function main() {
 
     }
 
+    const signal =
+
+        result.signal;
+
     console.log(
 
-        "Dernier signal :",
+        "NOUVEAU SIGNAL :",
 
         signal.side,
 
-        new Date(signal.timestamp).toISOString()
+        new Date(
+
+            signal.timestamp
+
+        ).toISOString()
 
     );
-
-    const state = await getState();
-
-    // Évite d'envoyer plusieurs fois le même signal
-
-    if (
-
-        Number(state.lastSignalTimestamp) ===
-
-        Number(signal.timestamp)
-
-    ) {
-
-        console.log(
-
-            "Signal déjà envoyé. Aucun doublon."
-
-        );
-
-        return;
-
-    }
 
     const message =
 
@@ -696,9 +998,7 @@ async function main() {
 
     await saveState(
 
-        signal.timestamp,
-
-        state.sha || null
+        result.state
 
     );
 
